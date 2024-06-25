@@ -17,7 +17,11 @@ import (
 	"ioam-agent-turbo/github.com/Advanced-Observability/ioam-api"
 )
 
+var DO_LOOPBACK bool
+
 const (
+	FORCE_LOOPBACK      = true
+
 	IPV6_TLV_IOAM       = 49
 	IOAM_PREALLOC_TRACE = 0
 
@@ -52,29 +56,65 @@ func listDevices() {
 	}
 }
 
-func sendResponsePacket(handle *pcap.Handle, origIP *layers.IPv6) {
+// TODO: Does not work
+func sendBackPacket(handle *pcap.Handle, packet gopacket.Packet) {
+	log.Println("Loopback enabled, sending back the packet")
+
 	buffer := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 
-	// Create a new IPv6 header
-	ipv6 := &layers.IPv6{
-		Version:    6,
-		SrcIP:      origIP.DstIP,
-		DstIP:      origIP.SrcIP,
-		NextHeader: layers.IPProtocolNoNextHeader,
-		HopLimit:   255,
+	// Get Ethernet layer
+	ethLayer := packet.Layer(layers.LayerTypeEthernet)
+	if ethLayer == nil {
+		log.Println("Error: No Ethernet layer found in packet")
+		return
 	}
+	eth, _ := ethLayer.(*layers.Ethernet)
 
-	// Serialize the IPv6 header
+	// Get IPv6 layer
+	ipv6Layer := packet.Layer(layers.LayerTypeIPv6)
+	if ipv6Layer == nil {
+		log.Println("Error: No IPv6 layer found in packet")
+		return
+	}
+	ipv6, _ := ipv6Layer.(*layers.IPv6)
+
+	// Get Hop-by-Hop Options header
+	hbhLayer := packet.Layer(layers.LayerTypeIPv6HopByHop)
+	if hbhLayer == nil {
+		log.Println("Error: No Hop-by-Hop Options header found in packet")
+		return
+	}
+	hbh, _ := hbhLayer.(*layers.IPv6HopByHop)
+
+	// Swap Ethernet addresses
+	ethSrc := eth.SrcMAC
+	ethDst := eth.DstMAC
+	eth.SrcMAC = ethDst
+	eth.DstMAC = ethSrc
+
+	// Swap IPv6 addresses
+	ipv6Src := ipv6.SrcIP
+	ipv6Dst := ipv6.DstIP
+	ipv6.SrcIP = ipv6Dst
+	ipv6.DstIP = ipv6Src
+
+	// Serialize the layers
+	if err := eth.SerializeTo(buffer, opts); err != nil {
+		log.Fatalf("Error serializing Ethernet header: %v", err)
+	}
 	if err := ipv6.SerializeTo(buffer, opts); err != nil {
 		log.Fatalf("Error serializing IPv6 header: %v", err)
+	}
+	if err := hbh.SerializeTo(buffer, opts); err != nil {
+		log.Fatalf("Error serializing Hop-by-Hop header: %v", err)
 	}
 
 	// Send the packet
 	if err := handle.WritePacketData(buffer.Bytes()); err != nil {
 		log.Printf("Error sending packet: %v", err)
 	} else {
-		log.Printf("Sent DEX report to %s", origIP.SrcIP)
+		log.Printf("Sent packet to %s", ipv6.DstIP)
 	}
 }
 
@@ -82,7 +122,6 @@ func parseNodeData(p []byte, ttype uint32) (ioam_api.IOAMNode, error) {
 	node := ioam_api.IOAMNode{}
 	i := 0
 
-	log.Println(ttype)
 	if ttype&TRACE_TYPE_BIT0_MASK != 0 {
 		node.HopLimit = uint32(p[i])
 		node.Id = binary.BigEndian.Uint32(p[i:i+4]) & 0xFFFFFF
@@ -139,8 +178,10 @@ func parseNodeData(p []byte, ttype uint32) (ioam_api.IOAMNode, error) {
 	return node, nil
 }
 
-func parseIOAMTrace(p []byte) (*ioam_api.IOAMTrace, error) {
+func parseIOAMTrace(p []byte) (*ioam_api.IOAMTrace, bool, error) {
 	var ns, nodelen, remlen, ttype uint32
+	var loopback bool = ((p[2] & 0b00000010 ) >> 1) != 0
+
 	ns = uint32(binary.BigEndian.Uint16(p[:2]))
 	nodelen = uint32(p[2] >> 3)
 	remlen = uint32(p[3] & 0x7F)
@@ -152,24 +193,23 @@ func parseIOAMTrace(p []byte) (*ioam_api.IOAMTrace, error) {
 	for i < len(p) {
 		node, err := parseNodeData(p[i:], uint32(ttype))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 			}
 			i += int(nodelen) * 4
 			
 			if ttype&TRACE_TYPE_BIT22_MASK != 0 {
 				if len(p[i:]) < 4 {
-					return nil, errors.New("invalid packet length")
+					return nil, false, errors.New("invalid packet length")
 				}
 				opaqueLen := p[i]
 				node.IdWide = binary.BigEndian.Uint64(p[i : i+4])
 				if len(p[i:]) < 4+int(opaqueLen)*4 {
-					return nil, errors.New("invalid packet length")
+					return nil, false, errors.New("invalid packet length")
 				}
 				node.QueueDepth = binary.BigEndian.Uint32(p[i+4 : i+4+int(opaqueLen)*4])
 				i += 4 + int(opaqueLen)*4
 			}
 						
-		log.Println(node.String())
 		nodes = append(nodes, &node)
 	}
 
@@ -179,31 +219,33 @@ func parseIOAMTrace(p []byte) (*ioam_api.IOAMTrace, error) {
 		Nodes:       nodes,
 	}
 
-	return trace, nil
+	return trace, loopback, nil
 }
 
-func parseHopByHop(p []byte) ([]*ioam_api.IOAMTrace, error) {
+func parseHopByHop(p []byte) ([]*ioam_api.IOAMTrace, bool, error) {
 	if len(p) < 8 {
-		return nil, errors.New("Hop-by-Hop header too short")
+		return nil, false, errors.New("Hop-by-Hop header too short")
 	}
 
 	hbhLen := int(p[1] + 1) << 3
 	i := 2
 	var traces []*ioam_api.IOAMTrace
+	var loopback bool
 
 	for hbhLen > 0 {
 		if len(p[i:]) < 4 {
 			// Found padding or invalid trace data, return correctly parsed traces
-			return traces, nil
+			return traces, false, nil
 		}
 		var optType, optLen uint8 
 		optType = p[i]
 		optLen = p[i+1] + 2
 
 		if optType == IPV6_TLV_IOAM && p[i+3] == IOAM_PREALLOC_TRACE {
-			trace, err := parseIOAMTrace(p[i+4 : i+int(optLen)])
+			trace, iloopback, err := parseIOAMTrace(p[i+4 : i+int(optLen)])
+			loopback = iloopback
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if trace != nil {
 				traces = append(traces, trace)
@@ -214,31 +256,30 @@ func parseHopByHop(p []byte) ([]*ioam_api.IOAMTrace, error) {
 		hbhLen -= int(optLen)
 	}
 
-	return traces, nil
+	return traces, loopback, nil
 }
 
-func packetHandler(handle *pcap.Handle, packet gopacket.Packet, report func(trace *ioam_api.IOAMTrace), dex bool) {
+func packetHandler(handle *pcap.Handle, packet gopacket.Packet, report func(trace *ioam_api.IOAMTrace)) {
 	ipv6Layer := packet.Layer(layers.LayerTypeIPv6)
 	if ipv6Layer != nil {
-		ipv6, _ := ipv6Layer.(*layers.IPv6)
 		
 		// Check if the next header field is Hop-by-Hop Options header
 		hbhLayer := packet.Layer(layers.LayerTypeIPv6HopByHop)
 		if hbhLayer != nil {
 			hbh, _ := hbhLayer.(*layers.IPv6HopByHop)
 			hbhHeader := hbh.LayerContents()
-			traces, err := parseHopByHop(hbhHeader)
+			traces, loopback, err := parseHopByHop(hbhHeader)
 			if err != nil {
 				log.Printf("Error parsing Hop-by-Hop header: %v", err)
 				return
 			}
 
-			for _, trace := range traces {
-				report(trace)
+			if FORCE_LOOPBACK || (DO_LOOPBACK && loopback) {
+				sendBackPacket(handle, packet)
 			}
 
-			if dex {
-				sendResponsePacket(handle, ipv6)
+			for _, trace := range traces {
+				report(trace)
 			}
 		}
 	}
@@ -247,7 +288,7 @@ func packetHandler(handle *pcap.Handle, packet gopacket.Packet, report func(trac
 func main() {
 	dev := flag.String("i", "", "Specify the interface to capture packets on")
 	list := flag.Bool("l", false, "List all available interfaces")
-	dex := flag.Bool("d", false, "Activate direct exporting")
+	flag.BoolVar(&DO_LOOPBACK, "loopback", false, "Enable packet loopback")
 	output := flag.Bool("o", false, "Output traces to console")
 	help := flag.Bool("h", false, "View help")
 	flag.Parse()
@@ -267,7 +308,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	handle, err := pcap.OpenLive(*dev, 1600, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(*dev, 2048, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatalf("Couldn't open device %s: %v", *dev, err)
 	}
@@ -283,6 +324,7 @@ func main() {
 		reportFunc = func(trace *ioam_api.IOAMTrace) {
 			fmt.Println(trace)
 		}
+		fmt.Println("[IOAM Agent] Printing IOAM traces...")
 	} else {
 		collector := os.Getenv("IOAM_COLLECTOR")
 		if collector == "" {
@@ -303,11 +345,12 @@ func main() {
 				log.Printf("Error reporting trace: %v", err)
 			}
 		}
+		fmt.Println("[IOAM Agent] Reporting to IOAM collector...")
 	}
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	for packet := range packetSource.Packets() {
-		packetHandler(handle, packet, reportFunc, *dex)
+		packetHandler(handle, packet, reportFunc)
 	}
 }
