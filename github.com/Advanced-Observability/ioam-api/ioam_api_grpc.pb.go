@@ -30,7 +30,7 @@ const (
 // IOAM Service
 type IOAMServiceClient interface {
 	// Report an IOAM Trace
-	Report(ctx context.Context, in *IOAMTrace, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Report(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[IOAMTrace, emptypb.Empty], error)
 }
 
 type iOAMServiceClient struct {
@@ -41,15 +41,18 @@ func NewIOAMServiceClient(cc grpc.ClientConnInterface) IOAMServiceClient {
 	return &iOAMServiceClient{cc}
 }
 
-func (c *iOAMServiceClient) Report(ctx context.Context, in *IOAMTrace, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *iOAMServiceClient) Report(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[IOAMTrace, emptypb.Empty], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, IOAMService_Report_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &IOAMService_ServiceDesc.Streams[0], IOAMService_Report_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[IOAMTrace, emptypb.Empty]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IOAMService_ReportClient = grpc.ClientStreamingClient[IOAMTrace, emptypb.Empty]
 
 // IOAMServiceServer is the server API for IOAMService service.
 // All implementations must embed UnimplementedIOAMServiceServer
@@ -58,7 +61,7 @@ func (c *iOAMServiceClient) Report(ctx context.Context, in *IOAMTrace, opts ...g
 // IOAM Service
 type IOAMServiceServer interface {
 	// Report an IOAM Trace
-	Report(context.Context, *IOAMTrace) (*emptypb.Empty, error)
+	Report(grpc.ClientStreamingServer[IOAMTrace, emptypb.Empty]) error
 	mustEmbedUnimplementedIOAMServiceServer()
 }
 
@@ -69,8 +72,8 @@ type IOAMServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedIOAMServiceServer struct{}
 
-func (UnimplementedIOAMServiceServer) Report(context.Context, *IOAMTrace) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Report not implemented")
+func (UnimplementedIOAMServiceServer) Report(grpc.ClientStreamingServer[IOAMTrace, emptypb.Empty]) error {
+	return status.Errorf(codes.Unimplemented, "method Report not implemented")
 }
 func (UnimplementedIOAMServiceServer) mustEmbedUnimplementedIOAMServiceServer() {}
 func (UnimplementedIOAMServiceServer) testEmbeddedByValue()                     {}
@@ -93,23 +96,12 @@ func RegisterIOAMServiceServer(s grpc.ServiceRegistrar, srv IOAMServiceServer) {
 	s.RegisterService(&IOAMService_ServiceDesc, srv)
 }
 
-func _IOAMService_Report_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(IOAMTrace)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(IOAMServiceServer).Report(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: IOAMService_Report_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(IOAMServiceServer).Report(ctx, req.(*IOAMTrace))
-	}
-	return interceptor(ctx, in, info, handler)
+func _IOAMService_Report_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(IOAMServiceServer).Report(&grpc.GenericServerStream[IOAMTrace, emptypb.Empty]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IOAMService_ReportServer = grpc.ClientStreamingServer[IOAMTrace, emptypb.Empty]
 
 // IOAMService_ServiceDesc is the grpc.ServiceDesc for IOAMService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -117,12 +109,13 @@ func _IOAMService_Report_Handler(srv interface{}, ctx context.Context, dec func(
 var IOAMService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "ioam_api.IOAMService",
 	HandlerType: (*IOAMServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "Report",
-			Handler:    _IOAMService_Report_Handler,
+			StreamName:    "Report",
+			Handler:       _IOAMService_Report_Handler,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "ioam_api.proto",
 }

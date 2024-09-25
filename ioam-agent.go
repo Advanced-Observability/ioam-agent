@@ -59,7 +59,7 @@ func worker(id uint, ring *pfring.Ring, packets <-chan gopacket.Packet, reportFu
 func main() {
 	interfaceName := flag.String("i", "", "Specify the interface to capture packets on")
 	outputToConsole := flag.Bool("o", false, "Output IOAM traces to console")
-	workerNmb := flag.Uint("g", 128, "Number of Goroutines for packet parsing")
+	workerNmb := flag.Uint("g", 8, "Number of Goroutines for packet parsing")
 	flag.BoolVar(&doLoopback, "loopback", false, "Enable IOAM packet loopback")
 	showHelp := flag.Bool("h", false, "View help")
 	flag.Parse()
@@ -109,8 +109,16 @@ func main() {
 		defer conn.Close()
 
 		client := ioamAPI.NewIOAMServiceClient(conn)
+		
+		// Create the stream once and reuse it
+		stream, err := client.Report(context.Background())
+		if err != nil {
+			log.Fatalf("Failed to create gRPC stream: %v", err)
+		}
+		defer stream.CloseSend()
+
 		reportFunc = func(trace *ioamAPI.IOAMTrace) {
-			grpcReport(trace, client)
+			grpcReport(trace, stream)
 		}
 		fmt.Println("[IOAM Agent] Reporting to IOAM collector...")
 	}
@@ -131,7 +139,6 @@ func main() {
 
 		gpacket := gopacket.NewPacket(packet, layers.LayerTypeEthernet, gopacket.Default)
 		packets <-gpacket
-		// handlePacket(ring, gpacket, reportFunc)
 	}
 }
 
@@ -364,8 +371,9 @@ func parseHopByHop(data []byte) ([]*ioamAPI.IOAMTrace, bool, error) {
 	return traces, loopback, nil
 }
 
-func grpcReport(trace *ioamAPI.IOAMTrace, client ioamAPI.IOAMServiceClient) {
-	if _, err := client.Report(context.Background(), trace); err != nil {
+// grpcReport streams an IOAM trace to the gRPC server using a stream.
+func grpcReport(trace *ioamAPI.IOAMTrace, stream ioamAPI.IOAMService_ReportClient) {
+	if err := stream.Send(trace); err != nil {
 		log.Printf("Error reporting trace: %v", err)
 	}
 }

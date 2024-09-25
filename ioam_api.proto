@@ -10,7 +10,7 @@ option go_package = "github.com/Advanced-Observability/ioam-api";
  */
 service IOAMService {
 	/* Report an IOAM Trace */
-	rpc Report (IOAMTrace) returns (google.protobuf.Empty) {}
+	rpc Report (stream IOAMTrace) returns (google.protobuf.Empty) {}
 }
 
 /*
