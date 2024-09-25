@@ -50,10 +50,17 @@ var (
 	ioamPacketCount  uint = 0
 )
 
+func worker(id uint, ring *pfring.Ring, packets <-chan gopacket.Packet, reportFunc func(trace *ioamAPI.IOAMTrace)) {
+	for packet := range packets {
+		handlePacket(ring, packet, reportFunc)
+	}
+}
+
 func main() {
 	interfaceName := flag.String("i", "", "Specify the interface to capture packets on")
-	flag.BoolVar(&doLoopback, "loopback", false, "Enable IOAM packet loopback")
 	outputToConsole := flag.Bool("o", false, "Output IOAM traces to console")
+	workerNmb := flag.Uint("g", 128, "Number of Goroutines for packet parsing")
+	flag.BoolVar(&doLoopback, "loopback", false, "Enable IOAM packet loopback")
 	showHelp := flag.Bool("h", false, "View help")
 	flag.Parse()
 
@@ -66,6 +73,11 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+  
+  if *workerNmb == 0 {
+    fmt.Println("invalid value \"0\" for flag -g: cannot be 0")
+    os.Exit(1)
+  }
 
 	if doLoopback {
 		fmt.Println("[IOAM Agent] Loopback enabled: IOAM packet headers will be forwarded back to sender")
@@ -105,6 +117,11 @@ func main() {
 
 	go writeStats(statsFileName, *interfaceName)
 
+	packets := make(chan gopacket.Packet, *workerNmb)
+	for w := uint(1); w <= *workerNmb; w++ {
+		go worker(w, ring, packets, reportFunc)
+	}
+
 	for {
 		packet, _, err := ring.ReadPacketData()
 		if err != nil {
@@ -113,7 +130,8 @@ func main() {
 		}
 
 		gpacket := gopacket.NewPacket(packet, layers.LayerTypeEthernet, gopacket.Default)
-		handlePacket(ring, gpacket, reportFunc)
+		packets <-gpacket
+		// handlePacket(ring, gpacket, reportFunc)
 	}
 }
 
