@@ -6,13 +6,13 @@ import (
 	"log"
 	"net"
 	"strconv"
-    "io"
-    "fmt"
+  "io"
+  "fmt"
 
 	empty "google.golang.org/protobuf/types/known/emptypb"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
-    "google.golang.org/protobuf/types/known/emptypb"
+  "google.golang.org/protobuf/types/known/emptypb"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -73,10 +73,8 @@ var empty_inst = new(empty.Empty)
 
 func (Server) Report(stream ioamAPI.IOAMService_ReportServer) error {
 	for {
-		// Receive the next IOAMTrace from the stream
-		trace, err := stream.Recv()
+		request, err := stream.Recv()
 		if err == io.EOF {
-			// End of the stream
 			fmt.Println("Client closed stream")
 			return stream.SendAndClose(&emptypb.Empty{})
 		}
@@ -86,11 +84,11 @@ func (Server) Report(stream ioamAPI.IOAMService_ReportServer) error {
 		}
 
 		var traceID trace.TraceID
-		binary.BigEndian.PutUint64(traceID[:8], trace.GetTraceId_High())
-		binary.BigEndian.PutUint64(traceID[8:], trace.GetTraceId_Low())
+		binary.BigEndian.PutUint64(traceID[:8], request.GetTraceId_High())
+		binary.BigEndian.PutUint64(traceID[8:], request.GetTraceId_Low())
 
 		var spanID trace.SpanID
-		binary.BigEndian.PutUint64(spanID[:], trace.GetSpanId())
+		binary.BigEndian.PutUint64(spanID[:], request.GetSpanId())
 
 		span_ctx := trace.NewSpanContext(trace.SpanContextConfig{
 			TraceID:	traceID,
@@ -103,16 +101,15 @@ func (Server) Report(stream ioamAPI.IOAMService_ReportServer) error {
 		_, span := tracer.Start(ctx, "ioam-span")
 
 		i := 1
-		for _, node := range trace.GetNodes() {
-			key := "ioam_namespace" + strconv.FormatUint(uint64(trace.GetNamespaceId()), 10) +"_node" + strconv.Itoa(i)
-			str := ParseNode(node, trace.GetBitField())
+		for _, node := range request.GetNodes() {
+			key := "ioam_namespace" + strconv.FormatUint(uint64(request.GetNamespaceId()), 10) +"_node" + strconv.Itoa(i)
+			str := ParseNode(node, request.GetBitField())
 
 			span.SetAttributes(attribute.String(key, str))
 			i += 1
 		}
 
 		span.End()
-		return nil
 	}
 }
 

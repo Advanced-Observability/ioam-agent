@@ -371,7 +371,7 @@ func parseHopByHop(data []byte) ([]*ioamAPI.IOAMTrace, bool, error) {
 	return traces, loopback, nil
 }
 
-// grpcReport streams an IOAM trace to the gRPC server using a stream.
+// grpcReport streams an IOAM trace to the gRPC server
 func grpcReport(trace *ioamAPI.IOAMTrace, stream ioamAPI.IOAMService_ReportClient) {
 	if err := stream.Send(trace); err != nil {
 		log.Printf("Error reporting trace: %v", err)
@@ -429,13 +429,13 @@ func writeStats(fileName string, device string) {
 			log.Fatalf("Error reading current TX packets: %v", err)
 		}
 
-		forwardedPacketCount := currentRX - initialRX
-		receivedPacketCount := currentTX - initialTX
+		rxPacketCount := currentRX - initialRX
+		txPacketCount := currentTX - initialTX
 
 		// Update file statistics
 		file.Seek(0, io.SeekStart)
-		if _, err := fmt.Fprintf(file, "IPv6 packets parsed\t%d\nIOAM packets parsed\t%d\nPackets received\t%d\nPackets sent\t\t%d\n",
-			ipv6PacketCount, ioamPacketCount, receivedPacketCount, forwardedPacketCount); err != nil {
+		if _, err := fmt.Fprintf(file, "IPv6 packets parsed\t%d\nIOAM packets parsed\t%d\nPackets received\t%d\nPackets transmitted\t\t%d\n",
+			ipv6PacketCount, ioamPacketCount, rxPacketCount, txPacketCount); err != nil {
 			log.Fatalf("Error writing to stats file: %v", err)
 		}
 	}
