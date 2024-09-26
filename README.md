@@ -4,7 +4,7 @@ The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsi
 
 ## Prerequisites
 
-1. **Go Programming Language**: Make sure Go is installed on your system. You can download it from [here](https://golang.org/doc/install).
+1. **Go Programming Language**: Make sure Go is installed on your system. You can download it from [here](https://go.dev/doc/install).
 
 2. **PF_RING**: This application uses PF_RING to capture packets efficiently. You can install it from [packages](https://www.ntop.org/guides/pf_ring/get_started/packages_installation.html) or from [Git sources](https://www.ntop.org/guides/pf_ring/get_started/git_installation.html).
 
