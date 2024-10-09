@@ -1,6 +1,6 @@
 # IOAM Agent
 
-The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsible for capturing IPv6 packets with IOAM Hop-by-Hop headers, extracting IOAM traces, and reporting them to a gRPC server or printing them to the console.
+The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsible for capturing IPv6 packets with IOAM Hop-by-Hop headers, extracting IOAM traces, and reporting them to an IOAM collector or printing them to the console.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsi
 
 2. **PF_RING**: This application uses PF_RING to capture packets efficiently. You can install it from [packages](https://www.ntop.org/guides/pf_ring/get_started/packages_installation.html) or from [Git sources](https://www.ntop.org/guides/pf_ring/get_started/git_installation.html).
 
-3. **Protocol Buffers (`protoc`)**: Ensure `protoc` is installed to compile the `.proto` file. You can download it from [here](https://grpc.io/docs/protoc-installation/).
+3. **Protocol Buffers (`protoc`)**: Ensure `protoc` is installed with Go support to compile the `.proto` file. You can download it from [here](https://grpc.io/docs/protoc-installation/).
 
 ---
 
@@ -32,7 +32,7 @@ The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsi
 ## Running the IOAM Agent
 
 1. **Set the Required Environment Variables**:
-    - `IOAM_COLLECTOR`: Specify the gRPC collector address (e.g., `localhost:7123`).
+    - `IOAM_COLLECTOR`: Specify the IOAM collector address (e.g., `localhost:7123`).
     - Ensure PF_RING is loaded and functional.
 
 2. **Run the Agent**:
@@ -44,8 +44,8 @@ The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsi
 
     - Additional flags:
         - `-g`: Specify the maximum number of goroutines for parsing the packets (default is 8).
-        - `-loopback`: Enable packet loopback (send back packet copy).
-        - `-o`: Output IOAM traces to the console instead of sending them to a gRPC collector.
+        - `-loopback`: Enable packet loopback: send back a packet copy on the interface upon packet reception.
+        - `-o`: Output IOAM traces to the console instead of sending them to an IOAM collector.
         - `-h`: Display help.
 
     Example:
@@ -54,6 +54,5 @@ The IOAM (In-situ Operations, Administration, and Maintenance) Agent is responsi
     ```
 
 3. **Logs and Statistics**:
-    The agent writes packet statistics (e.g., number of IPv6 and IOAM packets parsed) to a file (`./agentStats`). You can view these stats in real-time.
+    The agent writes packet statistics (e.g., number of IPv6 and IOAM packets seen) to a file (`./agentStats`). They are updated in real-time.
 
----

@@ -371,7 +371,7 @@ func parseHopByHop(data []byte) ([]*ioamAPI.IOAMTrace, bool, error) {
 	return traces, loopback, nil
 }
 
-// grpcReport streams an IOAM trace to the gRPC server
+// grpcReport streams an IOAM trace to an IOAM collector
 func grpcReport(trace *ioamAPI.IOAMTrace, stream ioamAPI.IOAMService_ReportClient) {
 	if err := stream.Send(trace); err != nil {
 		log.Printf("Error reporting trace: %v", err)
