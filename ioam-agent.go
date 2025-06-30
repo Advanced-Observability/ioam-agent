@@ -4,30 +4,28 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"sync/atomic"
-	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	ioamAPI "ioam-agent-go/github.com/Advanced-Observability/ioam-api"
 )
 
 const (
-	statsFileName     = "agentStats"
+	statsFileName = "agentStats"
 )
 
 var (
-	ipv6PacketCount   uint64
-	ioamPacketCount   uint64
+	ipv6PacketCount uint64
+	ioamPacketCount uint64
 )
 
 func main() {
@@ -86,7 +84,7 @@ func setupReporting(cfg *Config) func(trace *ioamAPI.IOAMTrace) {
 		log.Fatal("'IOAM_COLLECTOR' environment variable not defined")
 	}
 
-	conn, err := grpc.Dial(collector, grpc.WithInsecure())
+	conn, err := grpc.NewClient(collector, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("Failed to connect to Ioam collector %s: %v", collector, err)
 	}
@@ -126,41 +124,4 @@ func handlePacket(packet gopacket.Packet, report func(*ioamAPI.IOAMTrace)) {
 	for _, trace := range traces {
 		report(trace)
 	}
-}
-
-func writeStats(fileName, iface string) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	file, err := os.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		log.Fatalf("Open stats file: %v", err)
-	}
-	defer file.Close()
-
-	rxf := fmt.Sprintf("/sys/class/net/%s/statistics/rx_packets", iface)
-	txf := fmt.Sprintf("/sys/class/net/%s/statistics/tx_packets", iface)
-	for range ticker.C {
-		rx := readInt(rxf)
-		tx := readInt(txf)
-		file.Seek(0, io.SeekStart)
-		fmt.Fprintf(file, "IPv6 packets parsed\t%d\nIoam packets parsed\t%d\nPackets received\t%d\nPackets transmitted\t%d\n",
-			atomic.LoadUint64(&ipv6PacketCount), atomic.LoadUint64(&ioamPacketCount), rx, tx)
-	}
-}
-
-func readInt(path string) uint64 {
-	f, err := os.Open(path)
-	if err != nil {
-		log.Fatalf("Open file %s: %v", path, err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	if scanner.Scan() {
-		var count uint64
-		fmt.Sscanf(scanner.Text(), "%d", &count)
-		return count
-	}
-	return 0
 }
