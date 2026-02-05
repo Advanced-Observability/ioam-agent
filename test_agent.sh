@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Script to test the IOAM agent with network namespaces
 
@@ -115,9 +115,9 @@ echo -e "\nSleeping for 2 seconds..."
 sleep 2
 
 echo -e "\n\n** TESTING (Ctrl-C to stop IOAM agent) **"
-sudo ip netns exec encap ping -i 0.5 db02::1
+sudo ip netns exec encap ping -i 0.5 db02::1 -q &
 PING_PID=$!
-sudo ip netns exec decap ./ioam-agent -i veth0 -d traces.csv -c localhost:12345678
+sudo ip netns exec decap ./ioam-agent -i veth0 -d traces.csv
 sudo kill $PING_PID
 
 echo -e "\n\n** DONE **\n\n"

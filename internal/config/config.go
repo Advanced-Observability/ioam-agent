@@ -12,6 +12,7 @@ type Config struct {
 	Collector string
 	Dumpfile  string
 	Statfile  string
+	Interval  time.Duration
 	Console   bool
 	Workers   uint
 	Loopback  bool // unused
@@ -20,8 +21,9 @@ type Config struct {
 func ParseFlags() *Config {
 	iface := flag.String("i", "", "Interface to capture packets on")
 	collector := flag.String("c", "", "Reporter: Collector socket for gRPC trace streaming (fallback: 'IOAM_COLLECTOR' env variable)")
-	dfile := flag.String("d", "", "Reporter: Dump received IOAM traces to file (csv format)")
-	sfile := flag.String("s", "agent-stats_%Y-%m-%d.log", "Print statistics to file, %Y-%m-%d is replaced by the current date, updated live every second")
+	dfile := flag.String("d", "", "Reporter: Dump received IOAM traces to file (CSV format)")
+	sfile := flag.String("s", "agent-stats_%Y-%m-%d.log", "Print statistics to file, %Y-%m-%d is replaced by the current date")
+	interval := flag.Duration("t", time.Second, "Interval for updating statistics file (0 disables)")
 	console := flag.Bool("o", false, "Reporter: Print IOAM traces to console")
 	workers := flag.Uint("g", 8, "Number of Goroutines for packet parsing")
 	flag.Parse()
@@ -36,6 +38,7 @@ func ParseFlags() *Config {
 		Collector: *collector,
 		Dumpfile:  *dfile,
 		Statfile:  expandFilename(*sfile, time.Now()),
+		Interval:  *interval,
 		Console:   *console,
 		Workers:   *workers,
 	}

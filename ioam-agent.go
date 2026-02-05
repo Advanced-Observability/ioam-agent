@@ -24,7 +24,7 @@ func main() {
 	}
 
 	reportFunc := reporter.SetupReporting(cfg)
-	go stats.WriteStats(cfg.Statfile, cfg.Interface)
+	go stats.WriteStats(cfg.Statfile, cfg.Interface, cfg.Interval)
 
 	packets := make(chan gopacket.Packet, cfg.Workers)
 	for w := uint(1); w <= cfg.Workers; w++ {

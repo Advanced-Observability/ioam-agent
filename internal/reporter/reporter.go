@@ -3,18 +3,26 @@ package reporter
 import (
 	"context"
 	"fmt"
+	"sync"
 	"log"
 	"os"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/Advanced-Observability/ioam-agent/internal/config"
 	ioamAPI "github.com/Advanced-Observability/ioam-api"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Reporter func(trace *ioamAPI.IOAMTrace)
+
+var (
+	clientStream grpc.ClientStreamingClient[ioamAPI.IOAMTrace, emptypb.Empty]
+	mu sync.Mutex
+	lastRun   time.Time
+	interval  = 5 * time.Second // Interval between attempts to reconnect to the collector
+)
 
 func SetupReporting(cfg *config.Config) Reporter {
 	var reporters []Reporter
@@ -44,30 +52,13 @@ func SetupReporting(cfg *config.Config) Reporter {
 		collector = cfg.Collector
 	}
 	if collector != "" {
-		conn, err := grpc.NewClient(
-			collector,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			log.Printf("Failed to connect to IOAM collector %s: %v", collector, err)
-		} else {
-			client := ioamAPI.NewIOAMServiceClient(conn)
-			stream, err := client.Report(context.Background())
-			if err != nil {
-				log.Printf("Failed to create gRPC stream: %v", err)
-			} else {
-				log.Println("[IOAM Agent] Reporting IOAM traces to collector...")
-				reporters = append(reporters, func(trace *ioamAPI.IOAMTrace) {
-					if err := stream.Send(trace); err != nil {
-						log.Printf("Error reporting trace: %v", err)
-					}
-				})
-			}
-		}
+		reporters = append(reporters, func(trace *ioamAPI.IOAMTrace) {
+			sendToCollector(trace, collector)
+		})
 	}
 
 	if len(reporters) == 0 {
-		log.Fatal("No IOAM reporting method configured")
+		log.Fatal("[IOAM Agent] No IOAM reporting method configured")
 	}
 
 	return func(trace *ioamAPI.IOAMTrace) {
@@ -76,6 +67,45 @@ func SetupReporting(cfg *config.Config) Reporter {
 			r(trace)
 		}
 	}
+}
+
+func sendToCollector(trace *ioamAPI.IOAMTrace, collector string) error {
+	if clientStream != nil {
+		if err := clientStream.Send(trace); err == nil {
+			return nil
+		} else {
+			log.Printf("Failed to send IOAM trace to collector: %v", err)
+		}
+	}
+	err := reconnectStream(collector)
+	return err
+}
+
+func reconnectStream(collector string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	now := time.Now()
+	wait := lastRun.Add(interval).Sub(now)
+	if wait > 0 {
+		return nil
+	}
+	lastRun = time.Now()
+
+	log.Printf("Trying to connect to collector")
+	conn, err := grpc.Dial(collector, grpc.WithInsecure())
+	if err != nil {
+		return err
+	}
+
+	client := ioamAPI.NewIOAMServiceClient(conn)
+	clientStream, err = client.Report(context.Background())
+	if err != nil {
+		return err
+	}
+	log.Printf("Successfully setup gRPC stream to collector")
+
+	return nil
 }
 
 func dumpToFile(trace *ioamAPI.IOAMTrace, f *os.File) {

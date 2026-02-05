@@ -71,14 +71,15 @@ type Server struct {
 }
 
 func (Server) Report(stream ioamAPI.IOAMService_ReportServer) error {
+	log.Println("New gRPC stream")
 	for {
 		request, err := stream.Recv()
 		if err == io.EOF {
-			log.Println("gRPC: Client closed stream")
+			log.Println("Client closed stream")
 			return stream.SendAndClose(&emptypb.Empty{})
 		}
 		if err != nil {
-			log.Printf("gRPC: Error receiving trace: %v", err)
+			log.Printf("Error receiving trace: %v", err)
 			return err
 		}
 
