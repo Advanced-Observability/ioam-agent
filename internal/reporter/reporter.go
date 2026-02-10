@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/Advanced-Observability/ioam-agent/internal/config"
-	ioamAPI "github.com/Advanced-Observability/ioam-api"
+	ioamAPI "github.com/Advanced-Observability/ioam-api/clt"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 

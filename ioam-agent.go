@@ -6,7 +6,7 @@ package main
 import (
 	"log"
 
-	ioamAPI "github.com/Advanced-Observability/ioam-api"
+	ioamAPI "github.com/Advanced-Observability/ioam-api/clt"
 	"github.com/google/gopacket"
 
 	"github.com/Advanced-Observability/ioam-agent/internal/capture"
@@ -16,70 +16,276 @@ import (
 	"github.com/Advanced-Observability/ioam-agent/internal/stats"
 )
 
+// Configuration constants
+const (
+	statsFileName = "agentStats"
+	forceLoopback = false // for testing
+)
+
+const (
+	ipv6TLVIOAM       = 49
+	ioamPreallocTrace = 0
+
+	traceTypeBit0Mask = 1 << (23 - iota)
+	traceTypeBit1Mask
+	traceTypeBit2Mask
+	traceTypeBit3Mask
+	traceTypeBit4Mask
+	traceTypeBit5Mask
+	traceTypeBit6Mask
+	traceTypeBit7Mask
+	traceTypeBit8Mask
+	traceTypeBit9Mask
+	traceTypeBit10Mask
+	traceTypeBit11Mask
+	traceTypeBit22Mask = 1 << 1
+)
+
+var (
+	doLoopback      bool
+	ipv6PacketCount uint = 0
+	ioamPacketCount uint = 0
+)
+
 func main() {
-	cfg := config.ParseFlags()
-	source, err := capture.InitializeCapture(cfg.Interface)
+	// Arguments parsing
+	interfaceName := flag.String("i", "", "Specify the interface to capture packets on")
+	outputToConsole := flag.Bool("o", false, "Output IOAM traces to console")
+	workerNmb := flag.Uint("g", 8, "Number of Goroutines for packet parsing")
+	flag.BoolVar(&doLoopback, "loopback", false, "Enable IOAM packet loopback (send back packet copy)")
+	showHelp := flag.Bool("h", false, "View help")
+	flag.Parse()
+
+	if *showHelp {
+		flag.Usage()
+		os.Exit(0)
+	}
+	if *interfaceName == "" {
+		flag.Usage()
+		os.Exit(1)
+	}
+	if *workerNmb == 0 {
+		fmt.Println("invalid value \"0\" for flag -g: cannot be 0")
+		os.Exit(1)
+	}
+	if doLoopback {
+		fmt.Println("[IOAM Agent] Loopback enabled: IOAM packet headers will be forwarded back to sender")
+	}
+
+	ring, err := initializeCapture(*interfaceName)
 	if err != nil {
 		log.Fatalf("Failed to initialize capture: %v", err)
 	}
 
-	reportFunc := reporter.SetupReporting(cfg)
-	go stats.WriteStats(cfg.Statfile, cfg.Interface, cfg.Interval)
+	// Set up the report function (either console or IOAM collector)
+	var reportFunc func(trace *ioamAPI.IOAMTrace)
+	var conn *grpc.ClientConn
+	if *outputToConsole {
+		reportFunc = consoleReport
+		fmt.Println("[IOAM Agent] Printing IOAM traces...")
+	} else {
+		collector := os.Getenv("IOAM_COLLECTOR")
+		if collector == "" {
+			log.Fatalf("'IOAM_COLLECTOR' environment variable not defined")
+		}
 
-	packets := make(chan gopacket.Packet, cfg.Workers)
-	for w := uint(1); w <= cfg.Workers; w++ {
-		go worker(w, packets, reportFunc)
+		// Create gRPC connection once
+		conn, err = grpc.Dial(collector, grpc.WithInsecure())
+		if err != nil {
+			log.Fatalf("Failed to connect to IOAM collector: %v", err)
+		}
+		defer conn.Close()
+
+		client := ioamAPI.NewIOAMServiceClient(conn)
+
+		// Create the stream once and reuse it
+		stream, err := client.Report(context.Background())
+		if err != nil {
+			log.Fatalf("Failed to create gRPC stream: %v", err)
+		}
+		defer stream.CloseSend()
+
+		reportFunc = func(trace *ioamAPI.IOAMTrace) {
+			grpcReport(trace, stream)
+		}
+		fmt.Println("[IOAM Agent] Reporting to IOAM collector...")
 	}
 
-	for packet := range source.Packets() {
-		packets <- packet
+	// Launch the statistics writer
+	go writeStats(statsFileName, *interfaceName)
+
+	packets := make(chan gopacket.Packet, *workerNmb)
+	for w := uint(1); w <= *workerNmb; w++ {
+		go worker(w, ring, packets, reportFunc)
+	}
+
+	// Main loop
+	for {
+		packet, _, err := ring.ReadPacketData()
+		if err != nil {
+			log.Printf("Error reading packet: %v", err)
+			continue
+		}
+
+		gpacket := gopacket.NewPacket(packet, layers.LayerTypeEthernet, gopacket.Default)
+		packets <- gpacket
 	}
 }
 
-func worker(id uint, packets <-chan gopacket.Packet, report func(*ioamAPI.IOAMTrace)) {
+// initializeCapture initializes the PF_RING ring on the specified interface
+func initializeCapture(interfaceName string) (*pfring.Ring, error) {
+	ring, err := pfring.NewRing(interfaceName, 2048, pfring.FlagPromisc)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't open device %s: %v", interfaceName, err)
+	}
+
+	if err := ring.SetBPFFilter("ip6[6] == 0"); err != nil {
+		return nil, fmt.Errorf("couldn't set BPF filter: %v", err)
+	}
+
+	if err := ring.SetDirection(pfring.ReceiveOnly); err != nil {
+		return nil, fmt.Errorf("error setting ring direction: %v", err)
+	}
+
+	if err := ring.Enable(); err != nil {
+		return nil, fmt.Errorf("error enabling ring: %v", err)
+	}
+
+	return ring, nil
+}
+
+// consoleReport prints the trace to the console
+func consoleReport(trace *ioamAPI.IOAMTrace) {
+	fmt.Println(trace)
+}
+
+// grpcReport streams an IOAM trace to an IOAM collector
+func grpcReport(trace *ioamAPI.IOAMTrace, stream ioamAPI.IOAMService_ReportClient) {
+	if err := stream.Send(trace); err != nil {
+		log.Printf("Error reporting trace: %v", err)
+	}
+}
+
+// worker is a goroutine that reads packets from the packet channel and parses them
+func worker(id uint, ring *pfring.Ring, packets <-chan gopacket.Packet, reportFunc func(trace *ioamAPI.IOAMTrace)) {
 	for packet := range packets {
-		parser.ParsePacket(packet, report)
+		handlePacket(ring, packet, reportFunc)
 	}
 }
 
-func sendBackPacket(ring *pfring.Ring, packet gopacket.Packet) {
-	buffer := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-
-	ethLayer := packet.Layer(layers.LayerTypeEthernet)
-	if ethLayer == nil {
-		log.Println("Error: No Ethernet layer found in packet")
-		return
-	}
-	eth, _ := ethLayer.(*layers.Ethernet)
-
-	ipv6Layer := packet.Layer(layers.LayerTypeIPv6)
-	if ipv6Layer == nil {
-		log.Println("Error: No IPv6 layer found in packet")
-		return
-	}
-	ipv6, _ := ipv6Layer.(*layers.IPv6)
+// handlePacket parses the packet and reports the IOAM trace to the reportFunc
+func handlePacket(ring *pfring.Ring, packet gopacket.Packet, report func(trace *ioamAPI.IOAMTrace)) {
+	ipv6PacketCount++
 
 	hbhLayer := packet.Layer(layers.LayerTypeIPv6HopByHop)
 	if hbhLayer == nil {
-		log.Println("Error: No Hop-by-Hop Options header found in packet")
 		return
 	}
+
 	hbh, _ := hbhLayer.(*layers.IPv6HopByHop)
-
-	// Swap source and destination MAC and IP addresses
-	eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
-	ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
-	hbh.NextHeader = layers.IPProtocolNoNextHeader
-
-	if err := gopacket.SerializeLayers(buffer, opts, eth, ipv6); err != nil {
-		log.Printf("Error serializing layers: %v", err)
+	traces, loopback, err := parseHopByHop(hbh.LayerContents())
+	if err != nil {
+		log.Printf("Error parsing Hop-by-Hop header: %v", err)
 		return
 	}
 
-	if err := ring.WritePacketData(buffer.Bytes()); err != nil {
-		log.Printf("Error sending packet: %v", err)
+	if forceLoopback || (doLoopback && loopback) {
+		sendBackPacket(ring, packet)
 	}
+
+	for _, trace := range traces {
+		report(trace)
+	}
+}
+
+func parseHopByHop(data []byte) ([]*ioamAPI.IOAMTrace, bool, error) {
+	if len(data) < 8 {
+		return nil, false, errors.New("Hop-by-Hop header too short")
+	}
+
+	hbhLen := int(data[1]+1) << 3
+	offset := 2
+	var traces []*ioamAPI.IOAMTrace
+	var loopback bool
+
+	for hbhLen > 0 {
+		if len(data[offset:]) < 4 {
+			return traces, false, nil
+		}
+
+		optType := data[offset]
+		optLen := int(data[offset+1] + 2)
+
+		if optType == ipv6TLVIOAM && data[offset+3] == ioamPreallocTrace {
+			ioamPacketCount++
+
+			trace, iloopback, err := parseIOAMTrace(data[offset+4 : offset+optLen])
+			loopback = iloopback
+			if err != nil {
+				return nil, false, err
+			}
+			if trace != nil {
+				traces = append(traces, trace)
+			}
+		}
+
+		offset += optLen
+		hbhLen -= optLen
+	}
+
+	return traces, loopback, nil
+}
+
+func parseIOAMTrace(data []byte) (*ioamAPI.IOAMTrace, bool, error) {
+	if len(data) < 8 {
+		return nil, false, errors.New("IOAM trace data too short")
+	}
+
+	ns := uint32(binary.BigEndian.Uint16(data[:2]))
+	loopback := (data[2] & 0b00000010) != 0
+	nodeLen := uint32(data[2] >> 3)
+	remLen := uint32(data[3] & 0x7F)
+	traceType := binary.BigEndian.Uint32(data[4:8]) >> 8
+	traceId_High := binary.BigEndian.Uint64(data[8:16])
+	traceId_Low := binary.BigEndian.Uint64(data[16:24])
+	spanId := binary.BigEndian.Uint64(data[24:32])
+
+	var nodes []*ioamAPI.IOAMNode
+	offset := 32 + int(remLen)*4
+
+	for offset < len(data) {
+		node, err := parseNodeData(data[offset:offset+int(nodeLen)*4], traceType)
+		if err != nil {
+			return nil, false, err
+		}
+		offset += int(nodeLen) * 4
+
+		if traceType&traceTypeBit22Mask != 0 {
+			if len(data[offset:]) < 4 {
+				return nil, false, errors.New("invalid packet length")
+			}
+			opaqueLen := data[offset]
+			node.OSS.SchemaId = binary.BigEndian.Uint32(data[offset : offset+4])
+			if len(data[offset:]) < 4+int(opaqueLen)*4 {
+				return nil, false, errors.New("invalid packet length")
+			}
+			node.OSS.Data = data[offset+4 : offset+4+int(opaqueLen)*4]
+			offset += 4 + int(opaqueLen)*4
+		}
+
+		nodes = append([]*ioamAPI.IOAMNode{&node}, nodes...)
+	}
+
+	trace := &ioamAPI.IOAMTrace{
+		TraceId_High: traceId_High,
+		TraceId_Low:  traceId_Low,
+		SpanId:       spanId,
+		BitField:     traceType << 8,
+		NamespaceId:  ns,
+		Nodes:        nodes,
+	}
+
+	return trace, loopback, nil
 }
 
 func parseNodeData(data []byte, traceType uint32) (ioamAPI.IOAMNode, error) {
@@ -92,8 +298,8 @@ func parseNodeData(data []byte, traceType uint32) (ioamAPI.IOAMNode, error) {
 		offset += 4
 	}
 	if traceType&traceTypeBit1Mask != 0 {
-		node.IngressId = uint32(binary.BigEndian.Uint16(data[offset:offset+2]))
-		node.EgressId = uint32(binary.BigEndian.Uint16(data[offset+2:offset+4]))
+		node.IngressId = uint32(binary.BigEndian.Uint16(data[offset : offset+2]))
+		node.EgressId = uint32(binary.BigEndian.Uint16(data[offset+2 : offset+4]))
 		offset += 4
 	}
 	if traceType&traceTypeBit2Mask != 0 {
@@ -142,109 +348,48 @@ func parseNodeData(data []byte, traceType uint32) (ioamAPI.IOAMNode, error) {
 	return node, nil
 }
 
-func parseIOAMTrace(data []byte) (*ioamAPI.IOAMTrace, bool, error) {
-	if len(data) < 8 {
-		return nil, false, errors.New("IOAM trace data too short")
+// sendBackPacket sends the packet back to the sender
+func sendBackPacket(ring *pfring.Ring, packet gopacket.Packet) {
+	buffer := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+
+	ethLayer := packet.Layer(layers.LayerTypeEthernet)
+	if ethLayer == nil {
+		log.Println("Error: No Ethernet layer found in packet")
+		return
+	}
+	eth, _ := ethLayer.(*layers.Ethernet)
+
+	ipv6Layer := packet.Layer(layers.LayerTypeIPv6)
+	if ipv6Layer == nil {
+		log.Println("Error: No IPv6 layer found in packet")
+		return
+	}
+	ipv6, _ := ipv6Layer.(*layers.IPv6)
+
+	hbhLayer := packet.Layer(layers.LayerTypeIPv6HopByHop)
+	if hbhLayer == nil {
+		log.Println("Error: No Hop-by-Hop Options header found in packet")
+		return
+	}
+	hbh, _ := hbhLayer.(*layers.IPv6HopByHop)
+
+	// Swap source and destination MAC and IP addresses
+	eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
+	ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
+	hbh.NextHeader = layers.IPProtocolNoNextHeader
+
+	if err := gopacket.SerializeLayers(buffer, opts, eth, ipv6); err != nil {
+		log.Printf("Error serializing layers: %v", err)
+		return
 	}
 
-	ns := uint32(binary.BigEndian.Uint16(data[:2]))
-	loopback := (data[2] & 0b00000010) != 0
-	nodeLen := uint32(data[2] >> 3)
-	remLen := uint32(data[3] & 0x7F)
-	traceType := binary.BigEndian.Uint32(data[4:8]) >> 8
-	traceId_High := binary.BigEndian.Uint64(data[8:16])
-	traceId_Low := binary.BigEndian.Uint64(data[16:24])
-	spanId := binary.BigEndian.Uint64(data[24:32])
-
-	var nodes []*ioamAPI.IOAMNode
-	offset := 32 + int(remLen)*4
-
-	for offset < len(data) {
-		node, err := parseNodeData(data[offset:offset+int(nodeLen)*4], traceType)
-		if err != nil {
-			return nil, false, err
-		}
-		offset += int(nodeLen) * 4
-
-		if traceType&traceTypeBit22Mask != 0 {
-			if len(data[offset:]) < 4 {
-				return nil, false, errors.New("invalid packet length")
-			}
-			opaqueLen := data[offset]
-			node.OSS.SchemaId = binary.BigEndian.Uint32(data[offset:offset+4])
-			if len(data[offset:]) < 4+int(opaqueLen)*4 {
-				return nil, false, errors.New("invalid packet length")
-			}
-			node.OSS.Data = data[offset+4:offset+4+int(opaqueLen)*4]
-			offset += 4 + int(opaqueLen)*4
-		}
-
-		nodes = append([]*ioamAPI.IOAMNode{&node}, nodes...)
-	}
-
-	trace := &ioamAPI.IOAMTrace {
-		TraceId_High: traceId_High,
-		TraceId_Low:  traceId_Low,
-		SpanId:		  spanId,
-		BitField:     traceType << 8,
-		NamespaceId:  ns,
-		Nodes:        nodes,
-	}
-
-	return trace, loopback, nil
-}
-
-func parseHopByHop(data []byte) ([]*ioamAPI.IOAMTrace, bool, error) {
-	if len(data) < 8 {
-		return nil, false, errors.New("Hop-by-Hop header too short")
-	}
-
-	hbhLen := int(data[1]+1) << 3
-	offset := 2
-	var traces []*ioamAPI.IOAMTrace
-	var loopback bool
-
-	for hbhLen > 0 {
-		if len(data[offset:]) < 4 {
-			return traces, false, nil
-		}
-
-		optType := data[offset]
-		optLen := int(data[offset+1] + 2)
-
-		if optType == ipv6TLVIOAM && data[offset+3] == ioamPreallocTrace {
-			ioamPacketCount++
-
-			trace, iloopback, err := parseIOAMTrace(data[offset+4 : offset+optLen])
-			loopback = iloopback
-			if err != nil {
-				return nil, false, err
-			}
-			if trace != nil {
-				traces = append(traces, trace)
-			}
-		}
-
-		offset += optLen
-		hbhLen -= optLen
-	}
-
-	return traces, loopback, nil
-}
-
-// grpcReport streams an IOAM trace to an IOAM collector
-func grpcReport(trace *ioamAPI.IOAMTrace, stream ioamAPI.IOAMService_ReportClient) {
-	if err := stream.Send(trace); err != nil {
-		log.Printf("Error reporting trace: %v", err)
+	if err := ring.WritePacketData(buffer.Bytes()); err != nil {
+		log.Printf("Error sending packet: %v", err)
 	}
 }
 
-func consoleReport(trace *ioamAPI.IOAMTrace) {
-	fmt.Println(trace)
-}
-
-// Write various packet statistics to fileName every second
-// Never returns, should be invoked as goroutine
+// writeStats writes various packet statistics to fileName every second, should be invoked as goroutine
 func writeStats(fileName string, device string) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()

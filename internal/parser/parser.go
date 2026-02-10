@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Advanced-Observability/ioam-agent/internal/stats"
-	ioamAPI "github.com/Advanced-Observability/ioam-api"
+	ioamAPI "github.com/Advanced-Observability/ioam-api/clt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
@@ -99,11 +99,14 @@ func parseIOAMTrace(data []byte) (*ioamAPI.IOAMTrace, bool, error) {
 	ns := uint32(binary.BigEndian.Uint16(data[:2]))
 	nodeLen := uint32(data[2] >> 3)
 	remLen := uint32(data[3] & 0x7F)
-	traceType := binary.BigEndian.Uint32(data[4:8]) >> 8
 	loopback := (data[2] & 0b00000010) != 0
+	traceType := binary.BigEndian.Uint32(data[4:8]) >> 8
+	traceId_High := binary.BigEndian.Uint64(data[8:16])
+	traceId_Low := binary.BigEndian.Uint64(data[16:24])
+	spanId := binary.BigEndian.Uint64(data[24:32])
 
 	var nodes []*ioamAPI.IOAMNode
-	offset := 8 + int(remLen)*4
+	offset := 32 + int(remLen)*4
 
 	for offset < len(data) {
 		node, err := parseNodeData(data[offset:offset+int(nodeLen)*4], traceType)
@@ -132,10 +135,13 @@ func parseIOAMTrace(data []byte) (*ioamAPI.IOAMTrace, bool, error) {
 		nodes = append([]*ioamAPI.IOAMNode{&node}, nodes...)
 	}
 
-	trace := &ioamAPI.IOAMTrace{
-		BitField:    traceType,
-		NamespaceId: ns,
-		Nodes:       nodes,
+	trace := &ioamAPI.IOAMTrace {
+		TraceId_High: traceId_High,
+		TraceId_Low:  traceId_Low,
+		SpanId:		  spanId,
+		BitField:     traceType << 8,
+		NamespaceId:  ns,
+		Nodes:        nodes,
 	}
 
 	return trace, loopback, nil

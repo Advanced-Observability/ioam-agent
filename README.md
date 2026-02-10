@@ -4,9 +4,11 @@ The IOAM (In-situ Operations, Administration, and Maintenance) agent inspects IP
 
 ## Prerequisites
 
-- [Go](https://go.dev/doc/install) (version 1.25.6 or higher)
+- [Go](https://go.dev/doc/install) (version 1.21 or higher)
 
-- (Optional) **PF_RING**: This application may use PF_RING to capture packets more efficiently. You can install it from [packages](https://www.ntop.org/guides/pf_ring/get_started/packages_installation.html) or from [Git sources](https://www.ntop.org/guides/pf_ring/get_started/git_installation.html).
+- **PF_RING**: This application uses PF_RING to capture packets efficiently. You can install it from [packages](https://www.ntop.org/guides/pf_ring/get_started/packages_installation.html) or from [Git sources](https://www.ntop.org/guides/pf_ring/get_started/git_installation.html).
+
+- [Protocol Buffers (`protoc`)](https://grpc.io/docs/protoc-installation/): Ensure `protoc` is installed with Go support to compile the `.proto` file. You can download it from.
 
 ---
 
@@ -32,8 +34,12 @@ make
 
 1. If using the `ioam-agent-pfring`, ensure that the PF_RING kernel module is loaded.
 
-2. **(Optionally)** Set the environment variable:
-  - `IOAM_COLLECTOR`: Specify the IOAM collector socket (`<ip:port>`).
+2. **Run the Agent**:
+    - Capture packets on a specified interface:
+
+    ```bash
+    ./ioam-agent -i <interface-name>
+    ```
 
 3. **Run the Agent**:
 This will capture IOAM traces of packets received on the specified interface:
@@ -42,27 +48,5 @@ This will capture IOAM traces of packets received on the specified interface:
 ./ioam-agent -i <interface name>
 ```
 
-### List of arguments:
-- `-i`: Specify the interface name for packet capture (**mandatory**).
-- `-c`: **Reporting Option**: Specify collector socket (`<ip:port>`) for streaming received IOAM traces with gRPC. `IOAM_COLLECTOR` environment variable can also be used (fallback).
-- `-d`: **Reporting Option**: Specify file for dumping received IOAM traces in a CSV format.
-- `-o`: **Reporting Option**: Print IOAM traces to the console.
-- `-s`: Specify log file for exporting agent statistics, rewritten at fixed intervals.
-- `-t`: Specify the interval for updating the statistics file (0 disables).
-- `-g`: Specify the number of goroutines for parsing the packets (default is 8). This might increase the maximum throughput depending on the system.
-- `-h`: Display help.
-  
-**At least one reporting option must be specified**.
-
-### Examples:
-```bash
-sudo ./ioam-agent -i eth0 -o
-```
-
-```bash
-sudo ./ioam-agent-pfring -d ./ioam-traces.csv -i eth1
-```
-
-```bash
-sudo ./ioam-agent -d ./ioam-traces.csv -s ./agent-stats.log -t 5s -c localhost:7123 -i lo -o
-```
+3. **Logs and Statistics**:
+    The agent writes packet statistics (e.g., number of IPv6 and IOAM packets seen) to a file (`./agentStats`). They are updated in real-time.
