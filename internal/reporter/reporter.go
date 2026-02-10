@@ -28,14 +28,14 @@ func SetupReporting(cfg *config.Config) Reporter {
 	var reporters []Reporter
 
 	if cfg.Console {
-		log.Println("[IOAM Agent] Printing IOAM traces...")
+		log.Println("[IOAM Agent CLT] Printing IOAM traces...")
 		reporters = append(reporters, func(trace *ioamAPI.IOAMTrace) {
 			fmt.Println(trace)
 		})
 	}
 
 	if cfg.Dumpfile != "" {
-		log.Println("[IOAM Agent] Dumping IOAM traces to file...")
+		log.Println("[IOAM Agent CLT] Dumping IOAM traces to file...")
 		f, err := os.OpenFile(cfg.Dumpfile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			log.Printf("Error opening file: %v", err)
@@ -58,7 +58,7 @@ func SetupReporting(cfg *config.Config) Reporter {
 	}
 
 	if len(reporters) == 0 {
-		log.Fatal("[IOAM Agent] No IOAM reporting method configured")
+		log.Fatal("[IOAM Agent CLT] No IOAM reporting method configured")
 	}
 
 	return func(trace *ioamAPI.IOAMTrace) {

@@ -12,7 +12,7 @@ import (
 )
 
 func InitializeCapture(interfaceName string) (*gopacket.PacketSource, error) {
-	log.Println("[IOAM Agent] Initializing capture with PF_RING")
+	log.Println("[IOAM Agent CLT] Initializing capture with PF_RING")
 	ring, err := pfring.NewRing(interfaceName, 2048, pfring.FlagPromisc)
 	if err != nil {
 		return nil, fmt.Errorf("Couldn't open device %s: %v", interfaceName, err)

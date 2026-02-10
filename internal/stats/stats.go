@@ -16,7 +16,7 @@ var (
 
 func WriteStats(filename, iface string, interval time.Duration) {
 	if interval == 0 {
-		log.Println("[IOAM Agent] Disabling statistics file")
+		log.Println("[IOAM Agent CLT] Disabling statistics file")
 		return
 	}
 
@@ -26,7 +26,7 @@ func WriteStats(filename, iface string, interval time.Duration) {
 	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Printf("Cannot open statistics file: %v", err)
-		log.Println("[IOAM Agent] Disabling statistics file")
+		log.Println("[IOAM Agent CLT] Disabling statistics file")
 		return
 	}
 	defer file.Close()
@@ -36,13 +36,13 @@ func WriteStats(filename, iface string, interval time.Duration) {
 	init_rx, err := readInt(rxf)
 	if err != nil {
 		log.Printf("Cannot open file: %v", err)
-		log.Println("[IOAM Agent] Disabling statistics file")
+		log.Println("[IOAM Agent CLT] Disabling statistics file")
 		return
 	}
 	init_tx, err := readInt(txf)
 	if err != nil {
 		log.Printf("Cannot open file: %v", err)
-		log.Println("[IOAM Agent] Disabling statistics file")
+		log.Println("[IOAM Agent CLT] Disabling statistics file")
 		return
 	}
 
