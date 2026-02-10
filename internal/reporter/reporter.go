@@ -111,7 +111,7 @@ func reconnectStream(collector string) error {
 func dumpToFile(trace *ioamAPI.IOAMTrace, f *os.File) {
 	for _, node := range trace.GetNodes() {
 		toPrint := fmt.Sprintf("%s,%d,%06x,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%04x,%08x,",
-			time.Now().Format(time.RFC3339), trace.GetNamespaceId(), trace.GetBitField(),
+			time.Now().Format(time.RFC3339Nano), trace.GetNamespaceId(), trace.GetBitField(),
 			node.GetHopLimit(), node.GetId(), node.GetIngressId(), node.GetEgressId(),
 			node.GetTimestampSecs(), node.GetTimestampFrac(), node.GetTransitDelay(), node.GetQueueDepth(),
 			node.GetCsumComp(), node.GetBufferOccupancy(), node.GetIngressIdWide(), node.GetEgressIdWide(),

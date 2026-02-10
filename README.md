@@ -4,7 +4,7 @@ The IOAM (In-situ Operations, Administration, and Maintenance) agent inspects IP
 
 ## Prerequisites
 
-- [Go](https://go.dev/doc/install) (version 1.21 or higher)
+- [Go](https://go.dev/doc/install) (version 1.25.6 or higher)
 
 - (Optional) **PF_RING**: This application may use PF_RING to capture packets more efficiently. You can install it from [packages](https://www.ntop.org/guides/pf_ring/get_started/packages_installation.html) or from [Git sources](https://www.ntop.org/guides/pf_ring/get_started/git_installation.html).
 

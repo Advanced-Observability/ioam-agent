@@ -52,7 +52,7 @@ func WriteStats(filename, iface string, interval time.Duration) {
 		if rx_err == nil && tx_err == nil {
 			file.Seek(0, io.SeekStart)
 			fmt.Fprintf(file, "%s parsed-ipv6=%d parsed-ioam=%d %s-rx=%d %s-tx=%d\n",
-				time.Now().Format(time.RFC3339), Ipv6PacketCount, IoamPacketCount, iface, rx-init_rx, iface, tx-init_tx)
+				time.Now().Format(time.RFC3339Nano), Ipv6PacketCount, IoamPacketCount, iface, rx-init_rx, iface, tx-init_tx)
 		}
 	}
 }
